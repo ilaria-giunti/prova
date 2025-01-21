@@ -11,3 +11,6 @@ openpyxl>=3.1.0
 bcrypt>=4.0.1
 python-dotenv>=1.0.0
 google-oauth
+google-auth-oauthlib 
+google-auth-httplib2 
+google-api-python-client
