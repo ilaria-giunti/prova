@@ -412,25 +412,20 @@ def main():
                     placeholder="https://example.com"
                 )
                 
-                if Fixed section of appenglish.py
-
-            if url_to_analyze:
-                        if st.button("Start Analysis"):
-                            with st.spinner("Analyzing feed..."):
-                                try:
-                                    feed_data = analyzer.load_excel(feed_file)
-                                    results = analyzer.analyze_feed(feed_data, url_to_analyze)
-                                    
-                                    st.subheader("Analysis Results")
-                                    st.markdown(results)
-                                except Exception as e:
-                                    st.error(f"Error during analysis: {str(e)}")
+                if url_to_analyze:
+                    if st.button("Start Analysis"):
+                        with st.spinner("Analyzing feed..."):
+                            try:
+                                feed_data = analyzer.load_excel(feed_file)
+                                results = analyzer.analyze_feed(feed_data, url_to_analyze)
                                 
-                except Exception as e:
-                    st.error(f"Error initializing application: {str(e)}")
-
-if __name__ == "__main__":
-    main()
+                                st.subheader("Analysis Results")
+                                st.markdown(results)
+                            except Exception as e:
+                                st.error(f"Error during analysis: {str(e)}")
+                            
+        except Exception as e:
+            st.error(f"Error initializing application: {str(e)}")
 
 if __name__ == "__main__":
     main()
