@@ -15,8 +15,8 @@ class FeedAnalyzer:
     def __init__(self, openai_api_key: str):
         openai_api_key=os.environ.get("OPENAI_API_KEY") 
         self.llm = ChatOpenAI(
-            temperature=0.2,
-            model="gpt-4o"
+            temperature=0,
+            model="gpt-4o-mini"
         )
     @staticmethod
     def load_excel(file):
