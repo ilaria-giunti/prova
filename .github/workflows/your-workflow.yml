@@ -22,4 +22,4 @@ jobs:
     - name: Run application
       env:
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      run: python your_script.py
+      run: python appenglish.py  # or finetuning.py, depending on which one you want to run
