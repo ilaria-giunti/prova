@@ -10,125 +10,250 @@ from dotenv import load_dotenv
 import hashlib
 import re
 from datetime import datetime
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
 
 # Load environment variables
 load_dotenv()
 
-class UserManager:
-    def __init__(self):
-        """Initialize Google Sheets API client."""
-        try:
-            # Create credentials from Streamlit secrets
-            credentials_dict = st.secrets["gcp_service_account"]
-            credentials = Credentials.from_service_account_info(
-                credentials_dict,
-                scopes=['https://www.googleapis.com/auth/spreadsheets']
-            )
-            
-            # Build the Sheets API service
-            self.service = build('sheets', 'v4', credentials=credentials)
-            self.spreadsheet_id = st.secrets["spreadsheet_id"]
-            self.range_name = 'Users!A:D'  # Assuming sheet name is 'Users' and columns A-D
-            
-        except Exception as e:
-            st.error(f"Failed to initialize Google Sheets API: {str(e)}")
-            raise
+# For testing, use a simple dictionary to store users
+TEST_USERS = {
+    'demo': {
+        'password': hashlib.sha256('demo123'.encode()).hexdigest(),
+        'email': 'demo@example.com'
+    }
+}
 
-    def get_users_df(self) -> pd.DataFrame:
-        """Get users data from Google Sheets."""
-        try:
-            result = self.service.spreadsheets().values().get(
-                spreadsheetId=self.spreadsheet_id,
-                range=self.range_name
-            ).execute()
+class FeedAnalyzer:
+    def __init__(self, openai_api_key: str = None):
+        """Initialize the analyzer with OpenAI API key."""
+        self.api_key = openai_api_key or os.environ.get("OPENAI_API_KEY")
+        
+        if not self.api_key:
+            raise ValueError("OPENAI_API_KEY must be provided either as parameter or environment variable")
             
-            values = result.get('values', [])
-            if not values:
-                return pd.DataFrame(columns=['username', 'password_hash', 'email', 'created_at'])
-            
-            # Convert to DataFrame
-            df = pd.DataFrame(values[1:], columns=values[0])  # First row as headers
-            return df
-            
-        except Exception as e:
-            st.error(f"Error reading from Google Sheets: {str(e)}")
-            return pd.DataFrame(columns=['username', 'password_hash', 'email', 'created_at'])
+        self.llm = ChatOpenAI(
+            api_key=self.api_key,
+            temperature=0.2,
+            model="gpt-4"
+        )
 
-    def hash_password(self, password: str) -> str:
-        """Create a hash of the password."""
-        return hashlib.sha256(password.encode()).hexdigest()
-
-    def add_user_to_sheet(self, username: str, password_hash: str, email: str) -> bool:
-        """Add a new user to the Google Sheet."""
+    @staticmethod
+    def load_excel(file):
+        """Load and process Excel file."""
         try:
-            values = [
-                [username, password_hash, email, datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
-            ]
+            df = pd.read_excel(file)
+            if df.empty:
+                raise ValueError("The Excel file is empty")
             
-            body = {
-                'values': values
+            df.columns = df.columns.str.lower().str.strip()
+            
+            column_mapping = {
+                'title': 'title',
+                'description': 'description',
+                'price': 'price',
+                'availability': 'availability',
+                'additional_images': 'additional_image_link'
             }
             
-            self.service.spreadsheets().values().append(
-                spreadsheetId=self.spreadsheet_id,
-                range=self.range_name,
-                valueInputOption='RAW',
-                insertDataOption='INSERT_ROWS',
-                body=body
-            ).execute()
-            
-            return True
+            return df.rename(columns=column_mapping)
         except Exception as e:
-            st.error(f"Error writing to Google Sheets: {str(e)}")
-            return False
+            raise Exception(f"Error loading Excel file: {e}")
 
-    def register_user(self, username: str, password: str, email: str) -> tuple[bool, str]:
-        """Register a new user."""
+    def check_prices(self, url):
+        """Check prices from the website."""
         try:
-            users_df = self.get_users_df()
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
             
-            # Check if username exists
-            if not users_df.empty and username in users_df['username'].values:
-                return False, "Username already exists!"
+            soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Check if email exists
-            if not users_df.empty and email in users_df['email'].values:
-                return False, "Email already registered!"
+            price = soup.find('span', class_='price')
+            sale_price = soup.find('span', class_='sale-price')
             
-            # Hash password
-            password_hash = self.hash_password(password)
+            return {
+                'price': price.text.strip() if price else None,
+                'sale_price': sale_price.text.strip() if sale_price else None
+            }
+        except Exception as e:
+            print(f"Error scraping prices: {e}")
+            return None
+
+    def analyze_feed(self, feed_data, merchant_url):
+        """Analyze the feed data."""
+        try:
+            sample_data = feed_data.sample(n=3) if len(feed_data) > 3 else feed_data
             
-            # Add new user to sheet
-            if self.add_user_to_sheet(username, password_hash, email):
-                return True, "Registration successful!"
+            price_check = None
+            if 'link' in sample_data.columns:
+                sample_url = sample_data['link'].iloc[0]
+                price_check = self.check_prices(sample_url)
+
+            prompt = PromptTemplate(
+                template=self.get_analysis_prompt(),
+                input_variables=["feed_data", "url", "price_analysis"]
+            )
+
+            chain = LLMChain(llm=self.llm, prompt=prompt)
+            
+            result = chain.run({
+                "feed_data": sample_data.to_string(),
+                "url": merchant_url,
+                "price_analysis": str(price_check) if price_check else "No price analysis available"
+            })
+            
+            return result
+        except Exception as e:
+            raise Exception(f"Error analyzing feed: {e}")
+
+    @staticmethod
+    def get_analysis_prompt():
+        """Get the analysis prompt template."""
+        return '''
+        You are an expert in Google Merchant Center. Analyze the feed and provide a structured output as follows:
+
+        1. TITLES
+        -Evaluate the titles
+        If you find issues, such as titles exceeding 150 characters or missing brand name, flag them, otherwise skip.
+        -Provide optimized title examples as follows:
+
+        For each title that needs optimization, directly provide the example:
+        OPTIMIZED TITLE: [new title]
+
+        2. IMAGES (only if necessary)
+        - Flag if additional_image_link is missing, otherwise skip.
+        - Flag if there are fewer than 2 images between image_link and additional_image_link
+
+        3. PRICE (only if necessary):
+        - Flag if the price doesn't match the website price
+
+        4. DESCRIPTIONS:
+        - Evaluate the descriptions and provide optimized examples:
+        OPTIMIZED DESCRIPTION: [new description]
+
+        5. MISSING REQUIRED FIELDS
+        If there are missing required fields for any product, indicate:
+        Product name: missing attribute
+        - id
+        - title 
+        - description
+        - link
+        - image_link
+        - availability
+        - price
+        - google_product_category
+        - brand
+        - condition
+        [list only those actually missing]
+
+        Feed to analyze:
+        {feed_data}
+
+        URL: {url}
+
+        Price analysis:
+        {price_analysis}
+
+        IMPORTANT: 
+        - For each title to optimize, always show before and after
+        - For each product with missing fields, list only the fields that are actually missing
+        - Flag ONLY the problems found. If something is correct, don't mention it
+        '''
+
+def validate_user(username: str, password: str) -> tuple[bool, str]:
+    """Validate user credentials against test users."""
+    if username not in TEST_USERS:
+        return False, "Invalid username or password!"
+        
+    password_hash = hashlib.sha256(password.encode()).hexdigest()
+    if password_hash != TEST_USERS[username]['password']:
+        return False, "Invalid username or password!"
+        
+    return True, "Login successful!"
+
+def login_page():
+    """Display the login page."""
+    st.title("Login")
+    
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        st.info("Demo credentials - Username: demo, Password: demo123")
+        submit_button = st.form_submit_button("Login")
+        
+        if submit_button:
+            if username and password:
+                success, message = validate_user(username, password)
+                if success:
+                    st.session_state['logged_in'] = True
+                    st.session_state['username'] = username
+                    st.success(message)
+                    st.rerun()
+                else:
+                    st.error(message)
             else:
-                return False, "Failed to register user"
-            
-        except Exception as e:
-            return False, f"An error occurred: {str(e)}"
+                st.error("Please fill in all fields")
 
-    def verify_user(self, username: str, password: str) -> tuple[bool, str]:
-        """Verify user credentials."""
+def main():
+    """Main application function."""
+    st.set_page_config(page_title="Feed Analyzer", page_icon="📊", layout="wide")
+    
+    # Initialize session state
+    if 'logged_in' not in st.session_state:
+        st.session_state['logged_in'] = False
+    if 'username' not in st.session_state:
+        st.session_state['username'] = None
+    
+    # Add logout button if user is logged in
+    if st.session_state['logged_in']:
+        col1, col2 = st.columns([9, 1])
+        with col2:
+            if st.button("Logout"):
+                st.session_state['logged_in'] = False
+                st.session_state['username'] = None
+                st.rerun()
+    
+    # Show appropriate page based on login state
+    if not st.session_state['logged_in']:
+        login_page()
+    else:
         try:
-            users_df = self.get_users_df()
+            # Get API key
+            openai_api_key = st.secrets.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
+            if not openai_api_key:
+                st.error("OpenAI API key not found. Please set it in Streamlit secrets or environment variables.")
+                return
+                
+            st.title(f"📈 Feed Audit and Optimization - Welcome {st.session_state['username']}!")
             
-            if users_df.empty:
-                return False, "Invalid username or password!"
+            analyzer = FeedAnalyzer(openai_api_key)
             
-            # Find user
-            user = users_df[users_df['username'] == username]
-            if user.empty:
-                return False, "Invalid username or password!"
+            feed_file = st.file_uploader(
+                "Select Excel feed file",
+                type=["xlsx", "xls"]
+            )
             
-            # Verify password
-            password_hash = self.hash_password(password)
-            if password_hash != user.iloc[0]['password_hash']:
-                return False, "Invalid username or password!"
-            
-            return True, "Login successful!"
-            
+            if feed_file:
+                url_to_analyze = st.text_input(
+                    "URL to analyze",
+                    placeholder="https://example.com"
+                )
+                
+                if url_to_analyze:
+                    if st.button("Start Analysis"):
+                        with st.spinner("Analyzing feed..."):
+                            try:
+                                feed_data = analyzer.load_excel(feed_file)
+                                results = analyzer.analyze_feed(feed_data, url_to_analyze)
+                                
+                                st.subheader("Analysis Results")
+                                st.markdown(results)
+                            except Exception as e:
+                                st.error(f"Error during analysis: {str(e)}")
+                            
         except Exception as e:
-            return False, f"An error occurred: {str(e)}"
+            st.error(f"Error initializing application: {str(e)}")
+
+if __name__ == "__main__":
+    main()
