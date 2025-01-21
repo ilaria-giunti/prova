@@ -10,17 +10,34 @@ from dotenv import load_dotenv
 import hashlib
 import re
 from datetime import datetime
+import json
 
 # Load environment variables
 load_dotenv()
 
-# For testing, use a simple dictionary to store users
-TEST_USERS = {
-    'demo': {
-        'password': hashlib.sha256('demo123'.encode()).hexdigest(),
-        'email': 'demo@example.com'
-    }
-}
+# File to store users (simulating a database)
+USERS_FILE = "users.json"
+
+def load_users():
+    """Load users from JSON file."""
+    try:
+        with open(USERS_FILE, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        # Initialize with demo user if file doesn't exist
+        users = {
+            'demo': {
+                'password': hashlib.sha256('demo123'.encode()).hexdigest(),
+                'email': 'demo@example.com'
+            }
+        }
+        save_users(users)
+        return users
+
+def save_users(users):
+    """Save users to JSON file."""
+    with open(USERS_FILE, 'w') as f:
+        json.dump(users, f)
 
 class FeedAnalyzer:
     def __init__(self, openai_api_key: str = None):
@@ -161,13 +178,52 @@ class FeedAnalyzer:
         - Flag ONLY the problems found. If something is correct, don't mention it
         '''
 
+def validate_email(email: str) -> bool:
+    """Validate email format."""
+    pattern = r'^[\w\.-]+@[\w\.-]+\.\w+$'
+    return re.match(pattern, email) is not None
+
+def validate_password(password: str) -> tuple[bool, str]:
+    """Validate password strength."""
+    if len(password) < 8:
+        return False, "Password must be at least 8 characters long"
+    if not any(c.isupper() for c in password):
+        return False, "Password must contain at least one uppercase letter"
+    if not any(c.islower() for c in password):
+        return False, "Password must contain at least one lowercase letter"
+    if not any(c.isdigit() for c in password):
+        return False, "Password must contain at least one number"
+    return True, "Password is valid"
+
+def register_user(username: str, password: str, email: str) -> tuple[bool, str]:
+    """Register a new user."""
+    users = load_users()
+    
+    if username in users:
+        return False, "Username already exists!"
+    
+    # Hash password
+    password_hash = hashlib.sha256(password.encode()).hexdigest()
+    
+    # Add new user
+    users[username] = {
+        'password': password_hash,
+        'email': email
+    }
+    
+    # Save updated users
+    save_users(users)
+    return True, "Registration successful!"
+
 def validate_user(username: str, password: str) -> tuple[bool, str]:
-    """Validate user credentials against test users."""
-    if username not in TEST_USERS:
+    """Validate user credentials."""
+    users = load_users()
+    
+    if username not in users:
         return False, "Invalid username or password!"
         
     password_hash = hashlib.sha256(password.encode()).hexdigest()
-    if password_hash != TEST_USERS[username]['password']:
+    if password_hash != users[username]['password']:
         return False, "Invalid username or password!"
         
     return True, "Login successful!"
@@ -195,6 +251,41 @@ def login_page():
             else:
                 st.error("Please fill in all fields")
 
+def register_page():
+    """Display the registration page."""
+    st.title("Register")
+    
+    with st.form("register_form"):
+        username = st.text_input("Username")
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        confirm_password = st.text_input("Confirm Password", type="password")
+        submit_button = st.form_submit_button("Register")
+        
+        if submit_button:
+            if username and email and password and confirm_password:
+                if not validate_email(email):
+                    st.error("Please enter a valid email address")
+                    return
+                
+                password_valid, password_message = validate_password(password)
+                if not password_valid:
+                    st.error(password_message)
+                    return
+                
+                if password != confirm_password:
+                    st.error("Passwords do not match")
+                    return
+                
+                success, message = register_user(username, password, email)
+                if success:
+                    st.success(message)
+                    st.info("You can now login with your credentials")
+                else:
+                    st.error(message)
+            else:
+                st.error("Please fill in all fields")
+
 def main():
     """Main application function."""
     st.set_page_config(page_title="Feed Analyzer", page_icon="📊", layout="wide")
@@ -216,7 +307,12 @@ def main():
     
     # Show appropriate page based on login state
     if not st.session_state['logged_in']:
-        login_page()
+        tab1, tab2 = st.tabs(["Login", "Register"])
+        
+        with tab1:
+            login_page()
+        with tab2:
+            register_page()
     else:
         try:
             # Get API key
