@@ -1,0 +1,6 @@
+ESEMPIO 1:
+URL: https://skinlabo.com/products/siero-attivo-acido-ialuronico
+TITOLO: Skinlabo - Siero attivo accido ialuronico per pelle secca
+DESCRIZIONE: Siero viso concentrato con acido ialuronico puro per una pelle intensamente idratata. La sua formula avanzata con molecole a diverso peso molecolare penetra in profondità, riducendo visibilmente rughe e linee sottili. Ideale per pelli secche, restituisce elasticità e luminosità al viso. Dermatologicamente testato, senza parabeni e profumi artificiali.
+CUSTOM_LABEL_0: pelle secca
+CUSTOM_LABEL_1: inverno

@@ -1,0 +1,4 @@
+https://www.gs1.org/services/check-digit-calculator
+https://nds-nl.wikipedia.org/wiki/ISO_4217
+https://www.google.com/basepages/producttype/taxonomy-with-ids.en-US.txt
+https://support.google.com/merchants/answer/7052112?hl=en
