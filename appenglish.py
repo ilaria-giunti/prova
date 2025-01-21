@@ -19,22 +19,57 @@ load_dotenv()
 # Initialize MongoDB connection
 class DatabaseManager:
     def __init__(self):
-        # Get MongoDB connection string from environment variable or Streamlit secrets
-        mongo_uri = st.secrets.get("MONGO_URI") or os.environ.get("MONGO_URI")
-        if not mongo_uri:
-            raise ValueError("MongoDB connection string not found in environment variables or secrets")
+        try:
+            # Get MongoDB connection string from environment variable or Streamlit secrets
+            self.mongo_uri = st.secrets.get("MONGO_URI") or os.environ.get("MONGO_URI")
+            if not self.mongo_uri:
+                raise ValueError("MongoDB connection string not found in environment variables or secrets")
             
-        self.client = pymongo.MongoClient(mongo_uri)
-        self.db = self.client.feed_analyzer
-        self.users = self.db.users
-        
-        # Create indexes
-        self.users.create_index("username", unique=True)
-        self.users.create_index("email", unique=True)
+            # Test the connection before proceeding
+            self.client = pymongo.MongoClient(
+                self.mongo_uri,
+                serverSelectionTimeoutMS=5000  # 5 second timeout
+            )
+            # Ping the server to confirm connection
+            self.client.admin.command('ping')
+            
+            self.db = self.client.feed_analyzer
+            self.users = self.db.users
+            
+            # Create indexes if they don't exist
+            existing_indexes = self.users.index_information()
+            
+            if "username_1" not in existing_indexes:
+                self.users.create_index("username", unique=True)
+            if "email_1" not in existing_indexes:
+                self.users.create_index("email", unique=True)
+                
+        except pymongo.errors.ServerSelectionTimeoutError:
+            st.error("Could not connect to MongoDB. Please check if the database is running and accessible.")
+            raise
+        except pymongo.errors.OperationFailure as e:
+            st.error(f"Database operation failed: {str(e)}")
+            raise
+        except Exception as e:
+            st.error(f"Failed to initialize database connection: {str(e)}")
+            raise
+
+    def ensure_connection(self):
+        """Verify database connection is still active."""
+        try:
+            self.client.admin.command('ping')
+            return True
+        except:
+            st.error("Lost connection to database. Attempting to reconnect...")
+            self.__init__()
+            return False
 
     def register_user(self, username: str, password: str, email: str) -> Tuple[bool, str]:
         """Register a new user."""
         try:
+            if not self.ensure_connection():
+                return False, "Database connection error"
+                
             # Hash the password
             salt = bcrypt.gensalt()
             hashed_password = bcrypt.hashpw(password.encode('utf-8'), salt)
@@ -63,6 +98,9 @@ class DatabaseManager:
     def verify_user(self, username: str, password: str) -> Tuple[bool, str]:
         """Verify user credentials."""
         try:
+            if not self.ensure_connection():
+                return False, "Database connection error"
+                
             user = self.users.find_one({"username": username})
             
             if user is None:
@@ -78,13 +116,12 @@ class DatabaseManager:
         except Exception as e:
             return False, f"An error occurred: {str(e)}"
 
-    def user_exists(self, username: str) -> bool:
-        """Check if a username already exists."""
-        return self.users.find_one({"username": username}) is not None
-
     def close(self):
         """Close the database connection."""
-        self.client.close()
+        try:
+            self.client.close()
+        except:
+            pass
 
 class FeedAnalyzer:
     def __init__(self, openai_api_key: str = None):
