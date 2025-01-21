@@ -1,7 +1,7 @@
 import os
 import pandas as pd 
 import streamlit as st
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI  # Updated import
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 import requests
@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 _=load_dotenv()
 
-
+# Rest of the code remains the same
 class FeedAnalyzer:
     def __init__(self, openai_api_key: str):
         openai_api_key=os.environ.get("OPENAI_API_KEY") 
@@ -18,7 +18,6 @@ class FeedAnalyzer:
             temperature=0.2,
             model="gpt-4o"
         )
-
     @staticmethod
     def load_excel(file):
         try:
