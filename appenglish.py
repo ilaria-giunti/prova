@@ -50,7 +50,7 @@ class FeedAnalyzer:
         self.llm = ChatOpenAI(
             api_key=self.api_key,
             temperature=0.2,
-            model="gpt-4"
+            model="gpt-3.5-turbo"
         )
 
     @staticmethod
