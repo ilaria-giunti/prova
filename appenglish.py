@@ -1,15 +1,12 @@
 import os
 import pandas as pd 
 import streamlit as st
-from langchain_openai import ChatOpenAI
-from langchain.chains import LLMChain
-from langchain.prompts import PromptTemplate
-import requests
+import google.generativeai as genai
 from bs4 import BeautifulSoup
+import requests
 from dotenv import load_dotenv
 import hashlib
 import re
-from datetime import datetime
 import json
 
 # Load environment variables
@@ -24,7 +21,6 @@ def load_users():
         with open(USERS_FILE, 'r') as f:
             return json.load(f)
     except FileNotFoundError:
-        # Initialize with demo user if file doesn't exist
         users = {
             'demo': {
                 'password': hashlib.sha256('demo123'.encode()).hexdigest(),
@@ -40,18 +36,16 @@ def save_users(users):
         json.dump(users, f)
 
 class FeedAnalyzer:
-    def __init__(self, openai_api_key: str = None):
-        """Initialize the analyzer with OpenAI API key."""
-        self.api_key = openai_api_key or os.environ.get("OPENAI_API_KEY")
+    def __init__(self, gemini_api_key: str = None):
+        """Initialize the analyzer with Gemini API key."""
+        self.api_key = gemini_api_key or os.environ.get("GEMINI_API_KEY")
         
         if not self.api_key:
-            raise ValueError("OPENAI_API_KEY must be provided either as parameter or environment variable")
+            raise ValueError("GEMINI_API_KEY must be provided either as parameter or environment variable")
             
-        self.llm = ChatOpenAI(
-            api_key=self.api_key,
-            temperature=0.2,
-            model="gpt-3.5-turbo"
-        )
+        # Configure Gemini
+        genai.configure(api_key=self.api_key)
+        self.model = genai.GenerativeModel('gemini-pro')
 
     @staticmethod
     def load_excel(file):
@@ -98,7 +92,7 @@ class FeedAnalyzer:
             return None
 
     def analyze_feed(self, feed_data, merchant_url):
-        """Analyze the feed data."""
+        """Analyze the feed data using Gemini."""
         try:
             sample_data = feed_data.sample(n=3) if len(feed_data) > 3 else feed_data
             
@@ -107,20 +101,16 @@ class FeedAnalyzer:
                 sample_url = sample_data['link'].iloc[0]
                 price_check = self.check_prices(sample_url)
 
-            prompt = PromptTemplate(
-                template=self.get_analysis_prompt(),
-                input_variables=["feed_data", "url", "price_analysis"]
+            prompt = self.get_analysis_prompt().format(
+                feed_data=sample_data.to_string(),
+                url=merchant_url,
+                price_analysis=str(price_check) if price_check else "No price analysis available"
             )
 
-            chain = LLMChain(llm=self.llm, prompt=prompt)
+            # Generate response using Gemini
+            response = self.model.generate_content(prompt)
             
-            result = chain.run({
-                "feed_data": sample_data.to_string(),
-                "url": merchant_url,
-                "price_analysis": str(price_check) if price_check else "No price analysis available"
-            })
-            
-            return result
+            return response.text
         except Exception as e:
             raise Exception(f"Error analyzing feed: {e}")
 
@@ -202,16 +192,12 @@ def register_user(username: str, password: str, email: str) -> tuple[bool, str]:
     if username in users:
         return False, "Username already exists!"
     
-    # Hash password
     password_hash = hashlib.sha256(password.encode()).hexdigest()
-    
-    # Add new user
     users[username] = {
         'password': password_hash,
         'email': email
     }
     
-    # Save updated users
     save_users(users)
     return True, "Registration successful!"
 
@@ -316,14 +302,14 @@ def main():
     else:
         try:
             # Get API key
-            openai_api_key = st.secrets.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
-            if not openai_api_key:
-                st.error("OpenAI API key not found. Please set it in Streamlit secrets or environment variables.")
+            gemini_api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
+            if not gemini_api_key:
+                st.error("Gemini API key not found. Please set it in Streamlit secrets or environment variables.")
                 return
                 
             st.title(f"📈 Feed Audit and Optimization - Welcome {st.session_state['username']}!")
             
-            analyzer = FeedAnalyzer(openai_api_key)
+            analyzer = FeedAnalyzer(gemini_api_key)
             
             feed_file = st.file_uploader(
                 "Select Excel feed file",
