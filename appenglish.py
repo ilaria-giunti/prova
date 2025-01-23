@@ -15,6 +15,7 @@ load_dotenv()
 # Authentication configuration
 USERS_FILE = "users.json"
 DEMO_PASSWORD = hashlib.sha256('demo123'.encode()).hexdigest()
+REQUIRED_FIELDS = ['id', 'title', 'description', 'link', 'image_link', 'availability', 'price', 'condition']
 
 class FeedAnalyzer:
     def __init__(self, deepseek_api_key: str):
@@ -22,8 +23,8 @@ class FeedAnalyzer:
             model='deepseek-chat',
             openai_api_key=os.environ.get("DEEPSEEK_API_KEY"),
             openai_api_base='https://api.deepseek.com',
-            max_tokens=1024,
-            temperature=0.2
+            max_tokens=2048,
+            temperature=0.1
         )
 
     @staticmethod
@@ -33,8 +34,8 @@ class FeedAnalyzer:
             if df.empty:
                 raise ValueError("Excel file is empty")
             
-            df.columns = df.columns.str.lower().str.strip()
-            df.columns = df.columns.str.replace(' ', '_')
+            # Normalization pipeline
+            df.columns = df.columns.str.lower().str.strip().str.replace(' ', '_')
             
             column_mapping = {
                 'name': 'title',
@@ -45,69 +46,104 @@ class FeedAnalyzer:
                 'price': 'price',
                 'condition': 'condition',
                 'custom_label': 'custom_label',
-                'additional_images': 'additional_image_link'
+                'additional_images': 'additional_image_link',
+                'product_url': 'link'
             }
             
             return df.rename(columns=column_mapping)
+            
         except Exception as e:
             raise Exception(f"Error loading Excel file: {e}")
 
     def get_optimization_advice(self, feed_data, url):
         examples_text = self._load_examples()
+        validation_results = self._validate_structure(feed_data)
         
-        fields = [
-            'title', 'gtin', 'description', 'availability', 
-            'google_product_category', 'custom_label', 
-            'additional_image_link', 'price', 'condition', 'link'
-        ]
+        # Smart sampling
+        analysis_sample = self._get_analysis_sample(feed_data)
         
-        available_fields = [f for f in fields if f in feed_data.columns]
-        feed_subset = feed_data[available_fields]
+        prompt_template = """Analyze this product feed following Google Merchant Center guidelines:
 
-        prompt_template = """
-        Analyze the following product feed using these reference examples:
+FEED SAMPLE (representative products):
+{feed_data}
 
-        FEED DATA (first rows):
-        {feed_data}
+MERCHANT URL: {url}
 
-        MERCHANT URL: {url}
+REFERENCE EXAMPLES:
+{examples}
 
-        REFERENCE EXAMPLES:
-        {examples}
+MANDATORY FIELD CHECK:
+{validation}
 
-        Provide analysis and optimization suggestions for:
-        1. Titles (brand positioning, length)
-        2. Descriptions (structure, length)
-        3. Images (quantity, quality)
-        4. Custom labels (proper usage)
-        5. Mandatory fields validation
+STRUCTURED ANALYSIS REQUIRED:
+1. TITLES ANALYSIS:
+- Verify brand positioning (Faan Fruit first)
+- Check length <=150 chars
+- Flag invalid titles with [BAD]
+- Provide 3 optimized examples with [OPTIMIZED]
 
-        Include practical examples maintaining brand consistency.
-        """
+2. DESCRIPTIONS ANALYSIS: 
+- Check length <=5000 chars
+- Flag SEO issues with [ISSUE]
+- Provide 2 optimized examples with [OPTIMIZED]
+
+3. IMAGE ANALYSIS:
+- Verify additional_image_link presence
+- Count total images per product
+- Flag products with <3 images with [WARNING]
+
+4. CUSTOM LABELS:
+- Validate proper usage
+- Suggest values based on product type
+
+5. CRITICAL ISSUES:
+- List missing mandatory fields
+- Highlight pricing mismatches
+- Identify invalid URLs
+
+RESPONSE FORMAT:
+### [Section Name]
+- [Finding 1]
+- [Finding 2]
+[Optimized Example 1]
+[Optimized Example 2]
+
+RULES:
+1. Only mention problematic fields
+2. Use exact field names from feed
+3. Skip sections with no issues
+4. Prioritize critical errors first"""
         
         prompt = PromptTemplate(
             template=prompt_template,
-            input_variables=["feed_data", "url", "examples"]
+            input_variables=["feed_data", "url", "examples", "validation"]
         )
 
         chain = LLMChain(llm=self.llm, prompt=prompt)
         
         return chain.run({
-            "feed_data": feed_subset.head().to_string(),
+            "feed_data": analysis_sample.to_string(),
             "url": url,
-            "examples": examples_text
+            "examples": examples_text,
+            "validation": validation_results
         })
 
     def _load_examples(self):
         try:
-            examples_path = os.path.join("knowledge_base", "examples.txt")
-            with open(examples_path, 'r', encoding='utf-8') as file:
+            with open(os.path.join("knowledge_base", "examples.txt"), 'r', encoding='utf-8') as file:
                 return file.read()
         except Exception as e:
-            print(f"Error loading examples: {e}")
-            return ""
+            print(f"Example loading error: {e}")
+            return "No reference examples available"
 
-# Authentication functions
+    def _validate_structure(self, df):
+        missing_fields = [f for f in REQUIRED_FIELDS if f not in df.columns]
+        return f"Missing mandatory fields: {', '.join(missing_fields)}" if missing_fields else "All mandatory fields present"
+
+    def _get_analysis_sample(self, df):
+        return df.sample(n=5) if len(df) > 5 else df
+
+# Authentication functions (unchanged but included for completeness)
 def load_users():
     try:
         with open(USERS_FILE, 'r') as f:
@@ -204,23 +240,31 @@ def main_app():
     try:
         analyzer = FeedAnalyzer(os.environ.get("DEEPSEEK_API_KEY"))
         
-        feed_file = st.file_uploader("Upload Excel Feed", type=["xlsx", "xls"])
-        if feed_file:
+        with st.form("analysis_form"):
+            feed_file = st.file_uploader("Upload Excel Feed", type=["xlsx", "xls"])
             url = st.text_input("Merchant URL", placeholder="https://example.com")
-            if url and st.button("Analyze"):
+            
+            if st.form_submit_button("Analyze") and feed_file and url:
                 with st.spinner("Analyzing..."):
                     try:
                         df = analyzer.load_excel(feed_file)
                         results = analyzer.get_optimization_advice(df, url)
+                        
                         st.subheader("Analysis Results")
                         st.markdown(results)
+                        
+                        # Show raw data preview
+                        with st.expander("Data Preview"):
+                            st.dataframe(df.head(3))
+                            
                     except Exception as e:
                         st.error(f"Analysis error: {str(e)}")
+
     except Exception as e:
         st.error(f"Initialization error: {str(e)}")
 
 def main():
-    st.set_page_config(page_title="Feed Analyzer", page_icon="📊", layout="wide")
+    st.set_page_config(page_title="Feed Analyzer Pro", page_icon="📊", layout="wide")
     
     if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False
